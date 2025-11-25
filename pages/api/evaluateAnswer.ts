@@ -1,3 +1,4 @@
+// pages/api/evaluateAnswer.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import OpenAI from "openai";
 
@@ -13,11 +14,7 @@ type EvaluationResult = {
   feedbackSummary: string;
 };
 
-const ALLOWED_RESULTS: PracticeResult[] = [
-  "correct",
-  "partial",
-  "incorrect",
-];
+const ALLOWED_RESULTS: PracticeResult[] = ["correct", "partial", "incorrect"];
 
 function getFallbackEvaluation(exerciseIndex: number = 1): EvaluationResult {
   if (exerciseIndex === 1) {
@@ -95,6 +92,22 @@ export default async function handler(
 
   const trimmedAnswer = userAnswer.toString().trim();
 
+  // Build data URL from the Supabase image
+  let dataUrl: string | null = null;
+  try {
+    const imgResp = await fetch(imageUrl);
+    if (!imgResp.ok) {
+      throw new Error(`fetch image failed: ${imgResp.status}`);
+    }
+    const contentType = imgResp.headers.get("content-type") || "image/jpeg";
+    const arrBuf = await imgResp.arrayBuffer();
+    const base64 = Buffer.from(arrBuf).toString("base64");
+    dataUrl = `data:${contentType};base64,${base64}`;
+  } catch (e) {
+    console.error("evaluateAnswer: failed to fetch/convert image", e);
+    return res.status(200).json(getFallbackEvaluation(exerciseIndex));
+  }
+
   const systemPrompt = `
 És um avaliador de Matemática A do ensino secundário português (10.º–12.º ano),
 especialista em Exames Nacionais.
@@ -142,7 +155,7 @@ Avalia com base na imagem da resolução.
           role: "user",
           content: [
             { type: "text", text: userPrompt },
-            { type: "image_url", image_url: { url: imageUrl } },
+            { type: "image_url", image_url: { url: dataUrl } },
           ],
         },
       ],
