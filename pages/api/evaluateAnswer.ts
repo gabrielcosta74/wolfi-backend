@@ -1,4 +1,3 @@
-// pages/api/evaluateAnswer.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import OpenAI from "openai";
 
@@ -18,28 +17,12 @@ const ALLOWED_RESULTS: PracticeResult[] = ["correct", "partial", "incorrect"];
 
 function getFallbackEvaluation(exerciseIndex: number = 1): EvaluationResult {
   if (exerciseIndex === 1) {
-    return {
-      result: "correct",
-      score: 100,
-      feedbackSummary: "Bom trabalho! Acertaste este exercício.",
-    };
+    return { result: "correct", score: 100, feedbackSummary: "Bom trabalho! Acertaste este exercício." };
   }
-
   if (exerciseIndex === 2) {
-    return {
-      result: "partial",
-      score: 60,
-      feedbackSummary:
-        "Quase lá. Vale a pena rever alguns passos deste tipo de exercício.",
-    };
+    return { result: "partial", score: 60, feedbackSummary: "Quase lá. Vale a pena rever alguns passos deste tipo de exercício." };
   }
-
-  return {
-    result: "incorrect",
-    score: 20,
-    feedbackSummary:
-      "A tua resolução ainda precisa de reforço neste tipo de exercício.",
-  };
+  return { result: "incorrect", score: 20, feedbackSummary: "A tua resolução ainda precisa de reforço neste tipo de exercício." };
 }
 
 function sanitizeExerciseIndex(index?: number): number {
@@ -49,10 +32,7 @@ function sanitizeExerciseIndex(index?: number): number {
   return Math.floor(index);
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -91,6 +71,22 @@ export default async function handler(
   }
 
   const trimmedAnswer = userAnswer.toString().trim();
+
+  // Busca a imagem e converte para data URL (forçando image/jpeg)
+  let dataUrl: string | null = null;
+  try {
+    const imgResp = await fetch(imageUrl);
+    if (!imgResp.ok) {
+      throw new Error(`fetch image failed: ${imgResp.status}`);
+    }
+    const arrBuf = await imgResp.arrayBuffer();
+    const base64 = Buffer.from(arrBuf).toString("base64");
+    const contentType = "image/jpeg"; // forçar tipo suportado
+    dataUrl = `data:${contentType};base64,${base64}`;
+  } catch (e) {
+    console.error("evaluateAnswer: failed to fetch/convert image", e);
+    return res.status(200).json(getFallbackEvaluation(exerciseIndex));
+  }
 
   const systemPrompt = `
 És um avaliador de Matemática A do ensino secundário português (10.º–12.º ano),
@@ -139,10 +135,7 @@ Avalia com base na imagem da resolução.
           role: "user",
           content: [
             { type: "text", text: userPrompt },
-            {
-              type: "image_url",
-              image_url: { url: imageUrl }, // usa diretamente o URL público do Supabase
-            },
+            { type: "image_url", image_url: { url: dataUrl } },
           ],
         },
       ],
@@ -157,8 +150,7 @@ Avalia com base na imagem da resolução.
     let parsed: any;
     try {
       parsed = JSON.parse(content);
-    } catch (err) {
-      console.error("evaluateAnswer: failed to parse JSON", err);
+    } catch {
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
 
@@ -171,7 +163,6 @@ Avalia com base na imagem da resolução.
       parsed.feedbackSummary.length > 0;
 
     if (!isValid) {
-      console.warn("evaluateAnswer: invalid fields from OpenAI", parsed);
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
 
