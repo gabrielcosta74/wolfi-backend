@@ -88,7 +88,22 @@ export default async function handler(
   }
 
   const trimmedAnswer = userAnswer.toString().trim();
-  const cleanImageUrl = imageUrl.toString().trim();
+
+  // Busca a imagem e converte para data URL, forçando image/jpeg
+  let dataUrl: string | null = null;
+  try {
+    const imgResp = await fetch(imageUrl);
+    if (!imgResp.ok) {
+      throw new Error(`fetch image failed: ${imgResp.status}`);
+    }
+    const arrBuf = await imgResp.arrayBuffer();
+    const base64 = Buffer.from(arrBuf).toString("base64");
+    const contentType = "image/jpeg"; // força tipo suportado pelo OpenAI
+    dataUrl = `data:${contentType};base64,${base64}`;
+  } catch (e) {
+    console.error("evaluateAnswer: failed to fetch/convert image", e);
+    return res.status(200).json(getFallbackEvaluation(exerciseIndex));
+  }
 
   const systemPrompt = `
 És um avaliador de Matemática A do ensino secundário português (10.º–12.º ano),
@@ -137,10 +152,7 @@ Avalia com base na imagem da resolução.
           role: "user",
           content: [
             { type: "text", text: userPrompt },
-            {
-              type: "image_url",
-              image_url: { url: cleanImageUrl },
-            },
+            { type: "image_url", image_url: { url: dataUrl } },
           ],
         },
       ],
