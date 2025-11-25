@@ -92,15 +92,15 @@ export default async function handler(
 
   const trimmedAnswer = userAnswer.toString().trim();
 
-  // Busca a imagem e converte para data URL com MIME de imagem
+  // Busca a imagem no Supabase e converte para data URL (forçando content-type de imagem)
   let dataUrl: string | null = null;
   try {
     const imgResp = await fetch(imageUrl);
     if (!imgResp.ok) {
       throw new Error(`fetch image failed: ${imgResp.status}`);
     }
-    const contentType =
-      imgResp.headers.get("content-type")?.split(";")[0] || "image/jpeg";
+    // força sempre para image/jpeg (suportado pelo OpenAI)
+    const contentType = "image/jpeg";
     const arrBuf = await imgResp.arrayBuffer();
     const base64 = Buffer.from(arrBuf).toString("base64");
     dataUrl = `data:${contentType};base64,${base64}`;
