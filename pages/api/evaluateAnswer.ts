@@ -92,23 +92,6 @@ export default async function handler(
 
   const trimmedAnswer = userAnswer.toString().trim();
 
-  // Busca a imagem no Supabase e converte para data URL (forçando content-type de imagem)
-  let dataUrl: string | null = null;
-  try {
-    const imgResp = await fetch(imageUrl);
-    if (!imgResp.ok) {
-      throw new Error(`fetch image failed: ${imgResp.status}`);
-    }
-    // força sempre para image/jpeg (suportado pelo OpenAI)
-    const contentType = "image/jpeg";
-    const arrBuf = await imgResp.arrayBuffer();
-    const base64 = Buffer.from(arrBuf).toString("base64");
-    dataUrl = `data:${contentType};base64,${base64}`;
-  } catch (e) {
-    console.error("evaluateAnswer: failed to fetch/convert image", e);
-    return res.status(200).json(getFallbackEvaluation(exerciseIndex));
-  }
-
   const systemPrompt = `
 És um avaliador de Matemática A do ensino secundário português (10.º–12.º ano),
 especialista em Exames Nacionais.
@@ -156,7 +139,10 @@ Avalia com base na imagem da resolução.
           role: "user",
           content: [
             { type: "text", text: userPrompt },
-            { type: "image_url", image_url: { url: dataUrl } },
+            {
+              type: "image_url",
+              image_url: { url: imageUrl }, // usa diretamente o URL público do Supabase
+            },
           ],
         },
       ],
@@ -171,7 +157,8 @@ Avalia com base na imagem da resolução.
     let parsed: any;
     try {
       parsed = JSON.parse(content);
-    } catch {
+    } catch (err) {
+      console.error("evaluateAnswer: failed to parse JSON", err);
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
 
@@ -184,6 +171,7 @@ Avalia com base na imagem da resolução.
       parsed.feedbackSummary.length > 0;
 
     if (!isValid) {
+      console.warn("evaluateAnswer: invalid fields from OpenAI", parsed);
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
 
