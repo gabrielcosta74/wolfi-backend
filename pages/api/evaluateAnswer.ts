@@ -92,14 +92,15 @@ export default async function handler(
 
   const trimmedAnswer = userAnswer.toString().trim();
 
-  // Build data URL from the Supabase image
+  // Busca a imagem e converte para data URL com MIME de imagem
   let dataUrl: string | null = null;
   try {
     const imgResp = await fetch(imageUrl);
     if (!imgResp.ok) {
       throw new Error(`fetch image failed: ${imgResp.status}`);
     }
-    const contentType = imgResp.headers.get("content-type") || "image/jpeg";
+    const contentType =
+      imgResp.headers.get("content-type")?.split(";")[0] || "image/jpeg";
     const arrBuf = await imgResp.arrayBuffer();
     const base64 = Buffer.from(arrBuf).toString("base64");
     dataUrl = `data:${contentType};base64,${base64}`;
