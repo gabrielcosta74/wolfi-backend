@@ -120,13 +120,15 @@ Objetivo:
 3) Dar um score 0–100.
 4) Escrever um feedback muito curto (1–2 frases, PT-PT) sem revelar a solução completa.
 
-Responde **apenas** com:
+Responde **apenas** com um único objeto JSON com esta estrutura exata:
 {
-  "result": "...",
+  "result": "correct" | "partial" | "incorrect",
   "score": 0-100,
-  "feedbackSummary": "..."
+  "feedbackSummary": "frase curta em PT-PT"
 }
+Não incluas qualquer texto fora deste JSON.
 `;
+
 
   const userPrompt = `
 Subtema: ${subtopicName}
