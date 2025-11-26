@@ -20,7 +20,7 @@ type ExerciseDefinition = {
 type RequestBody = {
   subtopicName?: string;
   difficulty?: "easy" | "medium" | "hard";
-  exerciseIndex?: number;
+  exerciseIndex?: number; // 1, 2 ou 3
 };
 
 // --- Helpers ---
@@ -32,34 +32,6 @@ function sanitizeExerciseIndex(index?: number): number {
   return Math.floor(index);
 }
 
-function pickExerciseType(
-  subtopicName: string | undefined,
-  difficulty: "easy" | "medium" | "hard",
-  exerciseIndex: number,
-): ExerciseType {
-  const sub = (subtopicName || "").toLowerCase();
-
-  // Exemplo: se o subtema mencionar "problema" → word problem
-  if (sub.includes("problema") || sub.includes("aplicado")) {
-    return "applied_word_problem";
-  }
-
-  if (difficulty === "easy") {
-    return "basic_procedural";
-  }
-
-  if (difficulty === "hard") {
-    // último exercício da sessão pode ser mais "estilo exame"
-    if (exerciseIndex === 3) return "exam_multi_step";
-    return "mixed_rules";
-  }
-
-  // dificuldade média
-  if (exerciseIndex === 1) return "basic_procedural";
-  return "mixed_rules";
-}
-
-// Fallback local com variedade e 1 única pergunta
 function localFallback(exerciseIndex: number): ExerciseDefinition {
   if (exerciseIndex === 1) {
     return {
@@ -84,6 +56,27 @@ function localFallback(exerciseIndex: number): ExerciseDefinition {
   };
 }
 
+// Decide o tipo de exercício alvo com base no índice e dificuldade
+function chooseExerciseTypeHint(
+  exerciseIndex: number,
+  difficulty: "easy" | "medium" | "hard",
+): ExerciseType {
+  if (exerciseIndex === 1) {
+    return "basic_procedural";
+  }
+
+  if (exerciseIndex === 2) {
+    return "mixed_rules";
+  }
+
+  // exerciseIndex === 3
+  if (difficulty === "hard") {
+    return "exam_multi_step";
+  }
+
+  return "applied_word_problem";
+}
+
 // --- Handler ---
 
 export default async function handler(
@@ -100,37 +93,56 @@ export default async function handler(
     let { subtopicName, difficulty, exerciseIndex } = body;
 
     const safeIndex = sanitizeExerciseIndex(exerciseIndex);
-    const diff: "easy" | "medium" | "hard" = difficulty || "medium";
+    const diff: "easy" | "medium" | "hard" =
+      difficulty === "easy" || difficulty === "hard" ? difficulty : "medium";
+
     const sub = subtopicName?.trim() || "Derivadas";
-
     const fallback = localFallback(safeIndex);
-    const exerciseType = pickExerciseType(sub, diff, safeIndex);
+    const typeHint = chooseExerciseTypeHint(safeIndex, diff);
 
-    // Para o requirement de json_object: mencionar explicitamente JSON e estrutura
     const systemPrompt = `
-Tu és o Wolfi, explicador de Matemática A (Portugal), habituado a preparar exercícios para Exames Nacionais.
+Tu és o Wolfi, explicador de Matemática A (Portugal, 10.º–12.º ano) focado em Exames Nacionais.
 
-Tens de CRIAR UM ÚNICO EXERCÍCIO (sem alíneas) focado num subtema específico.
+Vais gerar **UM único exercício** de Matemática A, em português de Portugal, para o subtema "${sub}".
 
-Regras MUITO importantes para o enunciado:
-- Cria APENAS UMA pergunta principal.
-- NÃO incluas subquestões (nada de (a), (b), i), ii), etc.).
-- Não peças várias coisas no mesmo enunciado (por exemplo, evita "calcula a derivada, estuda o sinal e determina máximos e mínimos" tudo junto).
+Regras pedagógicas IMPORTANTES para o enunciado:
+- O exercício tem de ter **apenas uma pergunta principal**.
+- Podes dar 1–2 frases de contexto, mas NÃO cries uma ficha inteira nem muitas alíneas independentes.
+- NÃO cries subquestões (nada de (a), (b), i), ii) com objetivos diferentes).
+- Não peças várias coisas diferentes no mesmo enunciado (por exemplo, evita "calcula a derivada, estuda o sinal e determina máximos e mínimos" tudo junto).
 - O exercício deve poder ser resolvido em 3–5 minutos por um aluno de Matemática A.
 - Usa funções variadas e realistas para o secundário português:
   - polinómios (grau 1 a 4),
   - produtos ou quocientes de funções simples,
   - exponenciais ou logaritmos,
-  - trigonométricas simples quando fizer sentido.
+  - trigonométricas simples (sen, cos, e^x, etc.) quando fizer sentido para o subtema.
 - Evita repetir sempre a mesma forma de função (NÃO uses sempre 3x^4 - 5x^3 + 2x - 7).
 - Mantém o enunciado curto, claro e em Português de Portugal.
 
-Tens de responder APENAS com um único objeto JSON com esta estrutura exata:
+Diferença de dificuldades:
+- **easy**:
+  - foco em procedimentos básicos;
+  - derivadas diretas de polinómios ou funções simples (no máximo uma regra).
+- **medium**:
+  - combinação de 2 regras (por exemplo: produto + cadeia, quociente, etc.);
+  - cálculo mais trabalhoso, mas ainda directo.
+- **hard**:
+  - problemas que exigem interpretação (máximos/mínimos, taxa de variação, aplicações reais, estilo exame);
+  - podem ter 1–2 passos de raciocínio, mas continuam a ter **uma pergunta principal**.
+
+Tipos de exercício:
+- "basic_procedural": treino rápido, derivar uma função concreta; quase sem contexto.
+- "mixed_rules": função que obriga a usar várias regras de derivação.
+- "applied_word_problem": problema com um contexto curto e uma pergunta clara (ex.: taxa de variação, máximo/mínimo, interpretação da derivada).
+- "exam_multi_step": estilo exame nacional, com contexto mais longo e vários passos lógicos, mas ainda focado num objetivo principal.
+
+Tens de responder **APENAS** em formato json, com um único objeto JSON com esta estrutura exata:
 {
   "statement": "texto do enunciado em português, com \\n para quebras de linha, contendo UMA só pergunta",
   "exerciseType": "basic_procedural" | "mixed_rules" | "applied_word_problem" | "exam_multi_step"
 }
 Não incluas qualquer texto fora deste JSON. O output TEM de ser JSON válido.
+Este texto é um lembrete para a API: a palavra json está presente na mensagem.
 `;
 
     const difficultyLabel =
@@ -144,14 +156,24 @@ Não incluas qualquer texto fora deste JSON. O output TEM de ser JSON válido.
 Subtema: ${sub}
 Dificuldade: ${difficultyLabel}
 Exercício nº: ${safeIndex}
-Tipo de exercício pretendido: ${exerciseType}
+Tipo de exercício pretendido (hint): ${typeHint}
 
-Cria UM ÚNICO exercício adequado a este subtema e dificuldade, de forma que o aluno treine precisamente este conteúdo.
+Gera UM ÚNICO exercício adequado a este subtema e dificuldade, de forma que o aluno treine precisamente este conteúdo.
+
+Instruções específicas:
+- Se o tipo for "basic_procedural":
+  - Uma função simples e 1 pedido do tipo "calcula f'(x)" ou semelhante.
+- Se o tipo for "mixed_rules":
+  - Função que obrigue a combinar regras (produto, quociente, cadeia).
+- Se o tipo for "applied_word_problem":
+  - Problema com um contexto curto e uma pergunta clara (ex.: taxa de variação, máximo/mínimo, interpretação da derivada).
+- Se o tipo for "exam_multi_step":
+  - Estilo exame nacional: texto um pouco mais longo, exige planeamento, mas continua a ter uma pergunta principal muito clara.
 `;
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.6,
+      temperature: 0.7,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemPrompt },
@@ -181,15 +203,14 @@ Cria UM ÚNICO exercício adequado a este subtema e dificuldade, de forma que o 
       "exam_multi_step",
     ];
 
-    const finalExerciseType: ExerciseType = allowedTypes.includes(
-      parsed.exerciseType,
-    )
-      ? parsed.exerciseType
-      : exerciseType;
+    const finalType: ExerciseType =
+      parsed.exerciseType && allowedTypes.includes(parsed.exerciseType)
+        ? parsed.exerciseType
+        : typeHint;
 
     return res.status(200).json({
       statement,
-      exerciseType: finalExerciseType,
+      exerciseType: finalType,
     });
   } catch (err) {
     console.error("Error in /api/generateExercise:", err);
