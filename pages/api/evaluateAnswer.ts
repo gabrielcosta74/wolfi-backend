@@ -196,13 +196,32 @@ Avalia com base principalmente na resolução que vês na IMAGEM.
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
 
+    // --- limpar resposta para garantir JSON puro ---
+    let jsonText = text.trim();
+
+    // Caso venha em bloco de código ```json ... ```
+    if (jsonText.startsWith("```")) {
+      // remove ```json ou ``` na primeira linha
+      jsonText = jsonText.replace(/^```[a-zA-Z]*\s*/, "");
+      // remove ``` final
+      jsonText = jsonText.replace(/```$/, "").trim();
+    }
+
+    // Ficar só com o conteúdo entre a primeira { e a última }
+    const firstBrace = jsonText.indexOf("{");
+    const lastBrace = jsonText.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      jsonText = jsonText.slice(firstBrace, lastBrace + 1);
+    }
+
     let parsed: any;
     try {
-      parsed = JSON.parse(text);
+      parsed = JSON.parse(jsonText);
     } catch (err) {
       console.error("evaluateAnswer: failed to parse JSON from Gemini", {
         err,
         raw: text,
+        cleaned: jsonText,
       });
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
