@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 type PracticeResult = "correct" | "partial" | "incorrect";
 
@@ -97,7 +97,6 @@ export default async function handler(
 
     const contentTypeHeader =
       imgResp.headers.get("content-type") || "image/jpeg";
-    // Gemini aceita vários tipos; se vier PNG mantemos
     if (contentTypeHeader.startsWith("image/")) {
       mimeType = contentTypeHeader.split(";")[0];
     }
@@ -106,6 +105,11 @@ export default async function handler(
     base64Image = Buffer.from(arrBuf).toString("base64");
   } catch (e) {
     console.error("evaluateAnswer: failed to fetch/convert image", e);
+    return res.status(200).json(getFallbackEvaluation(exerciseIndex));
+  }
+
+  if (!base64Image) {
+    console.error("evaluateAnswer: base64Image is null");
     return res.status(200).json(getFallbackEvaluation(exerciseIndex));
   }
 
@@ -160,36 +164,33 @@ Resposta final escrita pelo aluno:
 ${trimmedAnswer || "<sem resposta textual>"} 
 
 Avalia com base principalmente na resolução que vês na IMAGEM.
-` as const;
+`;
 
   try {
-    const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-    });
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash", // ou "gemini-2.0-flash" se preferires
+    const result = await model.generateContent({
       contents: [
         {
           role: "user",
           parts: [
-            { text: `${systemPrompt}\n\n${userPrompt}` },
-            base64Image && {
+            { text: systemPrompt + "\n\n" + userPrompt },
+            {
               inlineData: {
                 mimeType,
                 data: base64Image,
               },
             },
-          ].filter(Boolean) as any[],
+          ],
         },
       ],
-      // Mantemos temperatura baixa para decisões mais estáveis
-      config: {
+      generationConfig: {
         temperature: 0.2,
       },
     });
 
-    const text = response.text();
+    const text = result.response.text();
     if (!text) {
       console.warn("evaluateAnswer: empty content from Gemini");
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
@@ -206,11 +207,11 @@ Avalia com base principalmente na resolução que vês na IMAGEM.
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
 
-    const result: PracticeResult = parsed.result;
+    const resultLabel: PracticeResult = parsed.result;
     const scoreRaw = Number(parsed.score);
 
     const isValid =
-      ALLOWED_RESULTS.includes(result) &&
+      ALLOWED_RESULTS.includes(resultLabel) &&
       Number.isFinite(scoreRaw) &&
       typeof parsed.feedbackSummary === "string" &&
       parsed.feedbackSummary.trim().length > 0;
@@ -220,11 +221,10 @@ Avalia com base principalmente na resolução que vês na IMAGEM.
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
 
-    // Sanear score para 0–100 inteiro
     const score = Math.max(0, Math.min(100, Math.round(scoreRaw)));
 
     const output: EvaluationResult = {
-      result,
+      result: resultLabel,
       score,
       feedbackSummary: parsed.feedbackSummary.trim(),
     };

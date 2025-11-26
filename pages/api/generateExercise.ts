@@ -105,7 +105,7 @@ async function fetchSubtopicContext(body: RequestBody) {
         year,
         official_code
       )
-    `
+    `,
     )
     .limit(1);
 
@@ -124,12 +124,17 @@ async function fetchSubtopicContext(body: RequestBody) {
   }
   if (!data) return null;
 
+  // topic pode vir como array [{ name, year, official_code }] ou objeto único
+  const topicData = Array.isArray((data as any).topic)
+    ? (data as any).topic[0]
+    : (data as any).topic;
+
   return {
     subtopicName: data.name as string,
     aiNotes: (data.ai_notes as string | null) || "",
-    topicName: (data.topic?.name as string | null) || null,
-    topicYear: (data.topic?.year as number | null) || null,
-    topicCode: (data.topic?.official_code as string | null) || null,
+    topicName: (topicData?.name as string | null) || null,
+    topicYear: (topicData?.year as number | null) || null,
+    topicCode: (topicData?.official_code as string | null) || null,
   };
 }
 
@@ -152,7 +157,8 @@ export default async function handler(
     // 1) Tentar buscar contexto real do subtema na BD
     const ctx = await fetchSubtopicContext(body);
 
-    const subtopicLabel = ctx?.subtopicName || body.subtopicName || "Subtema de derivadas";
+    const subtopicLabel =
+      ctx?.subtopicName || body.subtopicName || "Subtema de derivadas";
     const aiNotes = ctx?.aiNotes || "";
     const topicLabel = ctx?.topicName || "Matemática A";
     const yearLabel = ctx?.topicYear ? `${ctx.topicYear}.º ano` : "10.º–12.º ano";
@@ -165,8 +171,8 @@ export default async function handler(
       difficulty === "easy"
         ? "fácil (treino básico, cálculo mais direto)"
         : difficulty === "hard"
-        ? "difícil (nível mais próximo de exame, mas ainda uma só pergunta)"
-        : "médio (nível intermédio)";
+          ? "difícil (nível mais próximo de exame, mas ainda uma só pergunta)"
+          : "médio (nível intermédio)";
 
     // 2) Prompt MUITO explícito para JSON e 1 só pergunta
     const systemPrompt = `
