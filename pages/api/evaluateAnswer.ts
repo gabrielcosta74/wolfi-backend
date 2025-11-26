@@ -1,9 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import OpenAI from "openai";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { GoogleGenAI } from "@google/genai";
 
 type PracticeResult = "correct" | "partial" | "incorrect";
 
@@ -82,24 +78,32 @@ export default async function handler(
     return res.status(200).json(getFallbackEvaluation(exerciseIndex));
   }
 
-  if (!process.env.OPENAI_API_KEY) {
-    console.warn("evaluateAnswer: missing OPENAI_API_KEY");
+  if (!process.env.GEMINI_API_KEY) {
+    console.warn("evaluateAnswer: missing GEMINI_API_KEY");
     return res.status(200).json(getFallbackEvaluation(exerciseIndex));
   }
 
   const trimmedAnswer = userAnswer.toString().trim();
 
-  // Busca a imagem e converte para data URL, forçando image/jpeg
-  let dataUrl: string | null = null;
+  // 1) Buscar a imagem e converter para base64
+  let base64Image: string | null = null;
+  let mimeType: string = "image/jpeg";
+
   try {
     const imgResp = await fetch(imageUrl);
     if (!imgResp.ok) {
       throw new Error(`fetch image failed: ${imgResp.status}`);
     }
+
+    const contentTypeHeader =
+      imgResp.headers.get("content-type") || "image/jpeg";
+    // Gemini aceita vários tipos; se vier PNG mantemos
+    if (contentTypeHeader.startsWith("image/")) {
+      mimeType = contentTypeHeader.split(";")[0];
+    }
+
     const arrBuf = await imgResp.arrayBuffer();
-    const base64 = Buffer.from(arrBuf).toString("base64");
-    const contentType = "image/jpeg"; // força tipo suportado pelo OpenAI
-    dataUrl = `data:${contentType};base64,${base64}`;
+    base64Image = Buffer.from(arrBuf).toString("base64");
   } catch (e) {
     console.error("evaluateAnswer: failed to fetch/convert image", e);
     return res.status(200).json(getFallbackEvaluation(exerciseIndex));
@@ -109,31 +113,45 @@ export default async function handler(
 És um avaliador de Matemática A do ensino secundário português (10.º–12.º ano),
 especialista em Exames Nacionais.
 
-Recebes:
+Tens:
 - o enunciado de um exercício;
 - a resposta final em texto (opcional);
-- uma imagem com a resolução completa feita pelo aluno.
+- UMA IMAGEM com a resolução completa feita pelo aluno (passo a passo).
 
-Objetivo:
-1) Avaliar o raciocínio e a conclusão.
-2) Classificar como "correct", "partial" ou "incorrect".
-3) Dar um score 0–100.
-4) Escrever um feedback muito curto (1–2 frases, PT-PT) sem revelar a solução completa.
+O teu trabalho é avaliar a RESOLUÇÃO do aluno, não só o resultado final.
 
-Responde **apenas** com um único objeto JSON com esta estrutura exata:
+CRITÉRIOS DE AVALIAÇÃO (0–100):
+- 0–20: resposta essencialmente incorreta, raciocínio errado ou incompleto.
+- 21–50: há algumas ideias corretas, mas com erros graves ou passos em falta.
+- 51–80: maior parte do raciocínio está correta, com alguns erros ou omissões.
+- 81–100: resolução correta, bem justificada e coerente com o enunciado.
+
+Regras importantes:
+- Lê toda a resolução na imagem, mesmo que a resposta final pareça correta ou errada.
+- Dá mais peso ao raciocínio e justificação do que apenas ao resultado.
+- Usa sempre valores inteiros para o score (sem casas decimais).
+- A classificação "correct" deve ser rara: exige solução totalmente sólida.
+- "partial" é para resoluções com parte considerável correta mas com falhas.
+- "incorrect" é para resoluções sem entendimento adequado do problema.
+
+DEVOLVES APENAS UM OBJETO JSON, com esta estrutura EXATA:
 {
   "result": "correct" | "partial" | "incorrect",
   "score": 0-100,
   "feedbackSummary": "frase curta em PT-PT"
 }
-Não incluas qualquer texto fora deste JSON.
+
+- "feedbackSummary" deve ter 1–2 frases em PT-PT.
+- Não reveles a solução completa, apenas feedback geral.
+- Não escrevas qualquer texto fora deste JSON.
 `;
 
-
   const userPrompt = `
+Contexto do exercício para avaliação de Matemática A:
+
 Subtema: ${subtopicName}
 Dificuldade: ${difficulty}
-Exercício: ${exerciseIndex}
+Número do exercício (na ficha/exame): ${exerciseIndex}
 
 Enunciado:
 ${statement}
@@ -141,62 +159,79 @@ ${statement}
 Resposta final escrita pelo aluno:
 ${trimmedAnswer || "<sem resposta textual>"} 
 
-Avalia com base na imagem da resolução.
-`;
+Avalia com base principalmente na resolução que vês na IMAGEM.
+` as const;
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: userPrompt },
-            { type: "image_url", image_url: { url: dataUrl } },
-          ],
-        },
-      ],
-      temperature: 0.3,
+    const ai = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
     });
 
-    const content = completion.choices[0]?.message?.content;
-    if (!content) {
-      console.warn("evaluateAnswer: empty content from OpenAI");
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash", // ou "gemini-2.0-flash" se preferires
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: `${systemPrompt}\n\n${userPrompt}` },
+            base64Image && {
+              inlineData: {
+                mimeType,
+                data: base64Image,
+              },
+            },
+          ].filter(Boolean) as any[],
+        },
+      ],
+      // Mantemos temperatura baixa para decisões mais estáveis
+      config: {
+        temperature: 0.2,
+      },
+    });
+
+    const text = response.text();
+    if (!text) {
+      console.warn("evaluateAnswer: empty content from Gemini");
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
 
     let parsed: any;
     try {
-      parsed = JSON.parse(content);
+      parsed = JSON.parse(text);
     } catch (err) {
-      console.error("evaluateAnswer: failed to parse JSON from OpenAI", err);
+      console.error("evaluateAnswer: failed to parse JSON from Gemini", {
+        err,
+        raw: text,
+      });
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
+
+    const result: PracticeResult = parsed.result;
+    const scoreRaw = Number(parsed.score);
 
     const isValid =
-      ALLOWED_RESULTS.includes(parsed.result) &&
-      Number.isFinite(parsed.score) &&
-      parsed.score >= 0 &&
-      parsed.score <= 100 &&
+      ALLOWED_RESULTS.includes(result) &&
+      Number.isFinite(scoreRaw) &&
       typeof parsed.feedbackSummary === "string" &&
-      parsed.feedbackSummary.length > 0;
+      parsed.feedbackSummary.trim().length > 0;
 
     if (!isValid) {
-      console.warn("evaluateAnswer: invalid fields from OpenAI", parsed);
+      console.warn("evaluateAnswer: invalid fields from Gemini", parsed);
       return res.status(200).json(getFallbackEvaluation(exerciseIndex));
     }
 
+    // Sanear score para 0–100 inteiro
+    const score = Math.max(0, Math.min(100, Math.round(scoreRaw)));
+
     const output: EvaluationResult = {
-      result: parsed.result,
-      score: parsed.score,
-      feedbackSummary: parsed.feedbackSummary,
+      result,
+      score,
+      feedbackSummary: parsed.feedbackSummary.trim(),
     };
 
     return res.status(200).json(output);
   } catch (err) {
-    console.error("OpenAI error in evaluateAnswer", err);
+    console.error("Gemini error in evaluateAnswer", err);
     return res.status(200).json(getFallbackEvaluation(exerciseIndex));
   }
 }
